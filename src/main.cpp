@@ -1,36 +1,40 @@
 #include "lvgl.h"
-
-#define TX_PIN PC6  // Physical pin D1 (TX to Radar's RX)
-#define RX_PIN PC7  // Physical pin D0 (RX to Radar's TX)
-
-static void event_handler(lv_event_t * e);
-void testLvgl();
-void myTask(void *pvParameters);
-
-#ifdef ARDUINO
 #include "lvglDrivers.h"
 #include <Arduino.h>
 
-// Radar parsing buffer
+
+#define TX_PIN PC6
+#define RX_PIN PC7
+
+typedef struct {
+    int x;
+    int y;
+} radar_data_t;
+
 static uint8_t radar_buffer[512];
 static uint16_t buffer_len = 0;
 static lv_obj_t *uart_display_label;
+radar_data_t data;
 
 HardwareSerial Serial6(USART6); 
 
+
+void parse_radar_data(uint8_t *buf, int len);
+void myTask(void *pvParameters);
+static void event_handler(lv_event_t * e);
+void uiTask();
+
+
 void mySetup()
 {
-  // Initialise LVGL and UI
-  testLvgl();
+  uiTask();
 
-  // Initialise USART6 for LD2450 radar (115200 baud)
-Serial6.setTx(TX_PIN);
+  Serial6.setTx(TX_PIN);
   Serial6.setRx(RX_PIN);
   Serial6.begin(115200);
   Serial6.setTimeout(10);  // non-blocking reads
 
-  // Create the radar reading task (higher priority than default)
-  xTaskCreate(myTask, "RadarTask", 2048, NULL, 2, NULL);
+  xTaskCreate(myTask, "RadarTask", 2048, NULL, 2, NULL); //here
 }
 
 void loop()
@@ -39,25 +43,6 @@ void loop()
   vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
-#else
-// Simulator part (unchanged)
-#include "lvgl.h"
-#include "app_hal.h"
-#include <cstdio>
-
-int main(void)
-{
-  printf("LVGL Simulator\n");
-  fflush(stdout);
-  lv_init();
-  hal_setup();
-  testLvgl();
-  hal_loop();
-  return 0;
-}
-#endif
-
-// Parse radar data exactly as your PC code does
 void parse_radar_data(uint8_t *buf, int len)
 {
   for (int i = 0; i < len - 7; i++)
@@ -69,12 +54,13 @@ void parse_radar_data(uint8_t *buf, int len)
 
       if (buf[i+5] & 0x80)
         x -= 0x8000;
-      y -= 0x8000;
-
-      // Update LVGL label (must be called from the same task that owns LVGL)
+        y -= 0x8000;
       static char display_str[64];
       snprintf(display_str, sizeof(display_str), "x:%5d y:%5d", x, y);
+      lv_lock();
       lv_label_set_text(uart_display_label, display_str);
+      lv_unlock();
+      data = { x, y };
 
       i += 7; // skip parsed frame
     }
@@ -83,12 +69,10 @@ void parse_radar_data(uint8_t *buf, int len)
 
 void myTask(void *pvParameters)
 {
-  // Allow some time for hardware to settle
   vTaskDelay(pdMS_TO_TICKS(100));
 
   while (1)
   {
-    // Read all available bytes from Serial6
     while (Serial6.available())
     {
       uint8_t c = Serial6.read();
@@ -116,26 +100,48 @@ static void event_handler(lv_event_t * e)
     LV_LOG_USER("Toggled");
 }
 
-void testLvgl()
+void uiTask()
 {
-  // Your existing buttons
-  lv_obj_t * label;
-  lv_obj_t * btn1 = lv_button_create(lv_screen_active());
-  lv_obj_add_event_cb(btn1, event_handler, LV_EVENT_ALL, NULL);
-  lv_obj_align(btn1, LV_ALIGN_CENTER, 0, -40);
-  lv_obj_remove_flag(btn1, LV_OBJ_FLAG_PRESS_LOCK);
-  label = lv_label_create(btn1);
-  lv_label_set_text(label, "Button");
-  lv_obj_center(label);
+  /*Create a Tab view object*/
+    lv_obj_t * tabview;
+    tabview = lv_tabview_create(lv_screen_active());
+    lv_tabview_set_tab_bar_position(tabview, LV_DIR_RIGHT);
+    lv_tabview_set_tab_bar_size(tabview, 80);
 
-  lv_obj_t * btn2 = lv_button_create(lv_screen_active());
-  lv_obj_add_event_cb(btn2, event_handler, LV_EVENT_ALL, NULL);
-  lv_obj_align(btn2, LV_ALIGN_CENTER, 0, 40);
-  lv_obj_add_flag(btn2, LV_OBJ_FLAG_CHECKABLE);
-  lv_obj_set_height(btn2, LV_SIZE_CONTENT);
-  label = lv_label_create(btn2);
-  lv_label_set_text(label, "Toggle");
-  lv_obj_center(label);
+    lv_obj_set_style_bg_color(tabview, lv_palette_lighten(LV_PALETTE_GREEN, 2), 0);
+
+    lv_obj_t * tab_buttons = lv_tabview_get_tab_bar(tabview);
+    lv_obj_set_style_bg_color(tab_buttons, lv_palette_darken(LV_PALETTE_GREY, 3), 0);
+    lv_obj_set_style_text_color(tab_buttons, lv_palette_lighten(LV_PALETTE_GREY, 5), 0);
+    lv_obj_set_style_border_side(tab_buttons, LV_BORDER_SIDE_RIGHT, LV_PART_ITEMS | LV_STATE_CHECKED);
+
+    lv_obj_t * tab1 = lv_tabview_add_tab(tabview, "Mode 1");
+    lv_obj_t * tab2 = lv_tabview_add_tab(tabview, "Mode 2");
+    lv_obj_t * tab3 = lv_tabview_add_tab(tabview, "Mode 3");
+    lv_obj_t * tab4 = lv_tabview_add_tab(tabview, "Mode 4");
+
+    lv_obj_set_style_bg_color(tab2, lv_palette_lighten(LV_PALETTE_TEAL, 3), 0);
+    lv_obj_set_style_bg_opa(tab2, LV_OPA_COVER, 0);
+
+    /*Add content to the tabs*/
+    lv_obj_t * label = lv_label_create(tab1);
+    lv_label_set_text(label, "First tab");
+
+    label = lv_label_create(tab2);
+    lv_label_set_text(label, "Second tab");
+
+    lv_obj_t * btn = lv_button_create(label);
+    lv_obj_set_size(btn, 100, 50);
+    lv_obj_center(btn);
+
+
+    label = lv_label_create(tab3);
+    lv_label_set_text(label, "Third tab");
+
+    label = lv_label_create(tab4);
+    lv_label_set_text(label, "Forth tab");
+
+    lv_obj_remove_flag(lv_tabview_get_content(tabview), LV_OBJ_FLAG_SCROLLABLE);
 
   // Radar display label
   uart_display_label = lv_label_create(lv_screen_active());
