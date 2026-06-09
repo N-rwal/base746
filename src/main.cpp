@@ -7,18 +7,19 @@
 #define RX_PIN PC7
 
 typedef struct {
-    int x;
-    int y;
-} radar_data_t;
+    int16_t x;          // mm
+    int16_t y;          // mm
+    int16_t speed;      // cm/s (positive = moving away? check sign convention)
+    uint16_t dist_res;  // mm (distance resolution, optional)
+} radar_target_t;
 
 static uint8_t radar_buffer[512];
 static uint16_t buffer_len = 0;
 static lv_obj_t *uart_display_label;
-radar_data_t data;
 
 HardwareSerial Serial6(USART6); 
 
-
+static int16_t decode_ld2450_value(uint8_t low, uint8_t high);
 void parse_radar_data(uint8_t *buf, int len);
 void myTask(void *pvParameters);
 static void event_handler(lv_event_t * e);
@@ -42,29 +43,63 @@ void loop()
   // Empty – FreeRTOS handles everything
   vTaskDelay(pdMS_TO_TICKS(1000));
 }
-
-void parse_radar_data(uint8_t *buf, int len)
-{
-  for (int i = 0; i < len - 7; i++)
-  {
-    if (buf[i] == 0xAA && buf[i+1] == 0xFF)
-    {
-      int x = buf[i+4] | (buf[i+5] << 8);
-      int y = buf[i+6] | (buf[i+7] << 8);
-
-      if (buf[i+5] & 0x80)
-        x -= 0x8000;
-        y -= 0x8000;
-      static char display_str[64];
-      snprintf(display_str, sizeof(display_str), "x:%5d y:%5d", x, y);
-      lv_lock();
-      lv_label_set_text(uart_display_label, display_str);
-      lv_unlock();
-      data = { x, y };
-
-      i += 7; // skip parsed frame
+static int16_t decode_ld2450_value(uint8_t low, uint8_t high) {
+    uint16_t raw = low | (high << 8);
+    if (high & 0x80) {
+        // Positive: clear the sign bit and return as positive int
+        return (int16_t)(raw & 0x7FFF);
+    } else {
+        // Negative: clear the sign bit, then negate
+        return -(int16_t)(raw & 0x7FFF);
     }
-  }
+}
+
+void parse_radar_data(uint8_t *buf, int len) {
+    for (int i = 0; i <= len - 30; i++) {  // minimal frame length = 30 bytes
+        // Check full 4-byte header
+        if (buf[i] == 0xAA && buf[i+1] == 0xFF && buf[i+2] == 0x03 && buf[i+3] == 0x00) {
+            radar_target_t targets[3];
+            
+            // Parse each of the 3 targets
+            for (int t = 0; t < 3; t++) {
+                int offset = i + 4 + t * 8;   // each target uses 8 bytes
+                uint8_t xl = buf[offset];
+                uint8_t xh = buf[offset+1];
+                uint8_t yl = buf[offset+2];
+                uint8_t yh = buf[offset+3];
+                uint8_t sl = buf[offset+4];
+                uint8_t sh = buf[offset+5];
+                uint8_t rl = buf[offset+6];
+                uint8_t rh = buf[offset+7];
+                
+                targets[t].x = decode_ld2450_value(xl, xh);
+                targets[t].y = decode_ld2450_value(yl, yh);
+                targets[t].speed = decode_ld2450_value(sl, sh);
+                targets[t].dist_res = (rl | (rh << 8));
+            }
+            
+            // Optional: verify end marker (55 CC) – not mandatory but good for sanity
+            // if (buf[i+28] == 0x55 && buf[i+29] == 0xCC) { ... }
+            
+            // --- Use the data (example: display first non-zero target) ---
+            for (int t = 0; t < 3; t++) {
+                if (targets[t].x != 0 || targets[t].y != 0) { // target exists
+                    char display_str[80];
+                    snprintf(display_str, sizeof(display_str),
+                             "T%d: x=%5d mm, y=%5d mm, sp=%3d cm/s",
+                             t+1, targets[t].x, targets[t].y, targets[t].speed);
+                    // Update your UI (assuming LVGL)
+                    lv_lock();
+                    lv_label_set_text(uart_display_label, display_str);
+                    lv_unlock();
+                    break; // show only the first valid target, or loop to show all
+                }
+            }
+            
+            // Skip the whole frame (30 bytes) to continue searching
+            i += 29; // loop will increment again, so +29 ends at next byte after frame
+        }
+    }
 }
 
 void myTask(void *pvParameters)
