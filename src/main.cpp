@@ -118,7 +118,6 @@ void uiTask()
     lv_obj_t * tab1 = lv_tabview_add_tab(tabview, "Mode 1");
     lv_obj_t * tab2 = lv_tabview_add_tab(tabview, "Mode 2");
     lv_obj_t * tab3 = lv_tabview_add_tab(tabview, "Mode 3");
-    lv_obj_t * tab4 = lv_tabview_add_tab(tabview, "Mode 4");
 
     lv_obj_set_style_bg_color(tab2, lv_palette_lighten(LV_PALETTE_TEAL, 3), 0);
     lv_obj_set_style_bg_opa(tab2, LV_OPA_COVER, 0);
@@ -137,9 +136,6 @@ void uiTask()
 
     label = lv_label_create(tab3);
     lv_label_set_text(label, "Third tab");
-
-    label = lv_label_create(tab4);
-    lv_label_set_text(label, "Forth tab");
 
     lv_obj_remove_flag(lv_tabview_get_content(tabview), LV_OBJ_FLAG_SCROLLABLE);
 
