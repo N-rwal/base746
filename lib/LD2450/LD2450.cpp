@@ -40,7 +40,7 @@ void LD2450::_parseRadarData(uint8_t *buf, int len) {
                 targets[t].distRes = (rl | (rh << 8));
             }
             
-            // Copy to latest targets
+            // Copy to latest targets buffer
             memcpy(_latestTargets, targets, sizeof(targets));
             
             i += 29;
