@@ -1,91 +1,113 @@
-#include "lvgl.h"
-#include "lvglDrivers.h"
-#include <Arduino.h>
-#include "LD2450.h"
+#include "lvgl.h"            // LittlevGL (LVGL) graphics library
+#include "lvglDrivers.h"    // Platform-specific LVGL drivers (display, input)
+#include <Arduino.h>         // Arduino compatibility layer / FreeRTOS helpers
+#include "LD2450.h"         // LD2450 radar driver (parses radar frames)
 
-#define TX_PIN PC6
-#define RX_PIN PC7
+#define TX_PIN PC6  // UART TX pin connected to radar module
+#define RX_PIN PC7  // UART RX pin connected to radar module
 
-static lv_obj_t *radar_viz_container;
-static lv_obj_t *uart_display_label;
+// LVGL object handles used throughout the UI
+static lv_obj_t *radar_viz_container; // container for radar visualization (Tab 2)
+static lv_obj_t *uart_display_label; // reserved for UART debug display (unused)
 
+// Serial interface wired to the LD2450 radar module
 HardwareSerial Serial6(USART6); 
 
+// Labels that show numeric/readable target info on Tab 1
 static lv_obj_t *target1_label;
 static lv_obj_t *target2_label;
 static lv_obj_t *target3_label;
 
+// Small dot objects used to render targets on the visualization (Tab 2)
 static lv_obj_t *target_dots[3];
 
-// Create radar object
+// Radar parser/manager instance. The LD2450 class reads bytes
+// from the UART and exposes parsed target data.
 LD2450 radar(&Serial6);
+
+// Pre-allocated array for up to 3 detected targets.
 LD2450_Target targets[3];
 
+// Forward declarations for RTOS tasks and LVGL event handler
 void myTask(void *pvParameters);
 static void event_handler(lv_event_t * e);
 void uiTask();
 
+// Map radar coordinates (millimeters) into pixel positions inside
+// the visualization container and show/hide the dot objects.
+// - targets: array of detected targets (x forward, y lateral, etc.)
+// - container: LVGL object that defines the visual area (unused, kept for API clarity)
 void update_target_dots(LD2450_Target targets[3], lv_obj_t *container) {
   for (int i = 0; i < 3; i++) {
+    // If target coordinate is non-zero, consider it a valid detection
     if (targets[i].x != 0 || targets[i].y != 0) {
-      // X maps directly to horizontal position (left/right strafe)
+      // Convert mm coordinates to pixel positions (ad-hoc scaling)
       int px = 200 + (targets[i].x * 200 / 2500);
-      
-      // Y maps to vertical position (distance: 0 at bottom, 7000 at top)
       int py = 230 - (targets[i].y * 220 / 7000);
-      
-      // Clamp to visible area
+
+      // Clamp to the visualization bounds so dots remain visible
       if (px < 5) px = 5;
       if (px > 395) px = 395;
       if (py < 5) py = 5;
       if (py > 245) py = 245;
-      
+
+      // Position the dot (subtract half size to center)
       lv_obj_set_pos(target_dots[i], px - 5, py - 5);
       lv_obj_clear_flag(target_dots[i], LV_OBJ_FLAG_HIDDEN);
     } else {
+      // No valid target: hide the dot
       lv_obj_add_flag(target_dots[i], LV_OBJ_FLAG_HIDDEN);
     }
   }
 }
 
+// Equivalent of Arduino's setup(): initialize UI, UART and start task
 void mySetup()
 {
+  // Build the LVGL UI elements
   uiTask();
 
+  // Configure the hardware UART pins used by the radar
   Serial6.setTx(TX_PIN);
   Serial6.setRx(RX_PIN);
   Serial6.begin(115200);
   Serial6.setTimeout(10);
 
+  // Create a FreeRTOS task that will read/process radar data
   xTaskCreate(myTask, "RadarTask", 2048, NULL, 2, NULL);
 }
 
+// Main loop is intentionally empty: the real work happens in RTOS tasks.
 void loop()
 {
+  // Yield for a while to avoid busy-waiting.
   vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
+// RTOS task: reads UART bytes, feeds parser and updates LVGL UI
 void myTask(void *pvParameters)
 {
+  // Small initial delay to allow system startup
   vTaskDelay(pdMS_TO_TICKS(100));
 
   while (1)
   {
+    // Drain incoming bytes from the radar UART and feed parser
     while (Serial6.available())
     {
       uint8_t c = Serial6.read();
       radar.processByte(c);
     }
 
-    // Get all targets from radar
+    // Retrieve parsed target list from the radar object
     radar.getTargets(targets);
     
-    // Update Tab 1 text labels
+    // LVGL is not thread-safe: lock before modifying UI state
     lv_lock();
     
     char display_str[80];
     
-    // Target 1
+    // Format and update Target 1 label (or show placeholder)
     if (targets[0].x != 0 || targets[0].y != 0) {
       snprintf(display_str, sizeof(display_str),
                "Target 1: x=%5d mm, y=%5d mm, sp=%3d cm/s",
@@ -95,7 +117,7 @@ void myTask(void *pvParameters)
     }
     lv_label_set_text(target1_label, display_str);
     
-    // Target 2
+    // Format and update Target 2 label
     if (targets[1].x != 0 || targets[1].y != 0) {
       snprintf(display_str, sizeof(display_str),
                "Target 2: x=%5d mm, y=%5d mm, sp=%3d cm/s",
@@ -105,7 +127,7 @@ void myTask(void *pvParameters)
     }
     lv_label_set_text(target2_label, display_str);
     
-    // Target 3
+    // Format and update Target 3 label
     if (targets[2].x != 0 || targets[2].y != 0) {
       snprintf(display_str, sizeof(display_str),
                "Target 3: x=%5d mm, y=%5d mm, sp=%3d cm/s",
@@ -115,15 +137,18 @@ void myTask(void *pvParameters)
     }
     lv_label_set_text(target3_label, display_str);
     
-    // Update Tab 2 dots
+    // Update visual dot positions on Tab 2
     update_target_dots(targets, radar_viz_container);
     
+    // Release LVGL lock
     lv_unlock();
 
+    // Short delay to yield CPU and control update rate
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 
+// Simple LVGL event handler used as an example hook for interactive widgets
 static void event_handler(lv_event_t * e)
 {
   lv_event_code_t code = lv_event_get_code(e);
@@ -133,6 +158,10 @@ static void event_handler(lv_event_t * e)
     LV_LOG_USER("Toggled");
 }
 
+// Build the user interface (LVGL): a 3-tab view with
+// - Tab 1: textual target readouts
+// - Tab 2: radar visualization with dots and reference lines
+// - Tab 3: placeholder
 void uiTask()
 {
   /*Create a Tab view object*/
@@ -178,8 +207,7 @@ void uiTask()
   lv_obj_set_style_text_color(target3_label, lv_palette_main(LV_PALETTE_BLUE), 0);
   lv_obj_align(target3_label, LV_ALIGN_TOP_LEFT, 0, 60);
 
-  /* Tab 2 content - Simple radar visualization */
-  // Create a simple container with scroll disabled
+  /* Tab 2 content - radar visualization */
   radar_viz_container = lv_obj_create(tab2);
   lv_obj_set_size(radar_viz_container, 400, 250);
   lv_obj_center(radar_viz_container);
@@ -187,7 +215,6 @@ void uiTask()
   lv_obj_set_style_border_width(radar_viz_container, 2, 0);
   lv_obj_set_style_border_color(radar_viz_container, lv_palette_main(LV_PALETTE_GREY), 0);
   
-  // Disable scrolling on the container
   lv_obj_remove_flag(radar_viz_container, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_scrollbar_mode(radar_viz_container, LV_SCROLLBAR_MODE_OFF);
   
