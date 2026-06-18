@@ -76,6 +76,9 @@ Le fichier LD2450.cpp implémente le pilote radar LD2450 : il lit les octets de
 - **Logique de visualisation :** `update_target_dots()` convertit les coordonnées en millimètres en positions en pixels, les limite à la zone visible et affiche/masque les points ; des coordonnées nulles signifient « aucune cible ».
 - **Remarque concernant la concurrence :** Les mises à jour LVGL sont protégées par `lv_lock()` / `lv_unlock()` car LVGL n'est pas thread-safe.
 
+<img width="1655" height="2485" alt="image" src="https://github.com/user-attachments/assets/0393ad33-3352-45a3-819d-49192f917785" />
+<img width="1800" height="2878" alt="image" src="https://github.com/user-attachments/assets/3b1098d0-1124-403b-95b4-5207fd56da49" />
+<img width="1800" height="2297" alt="image" src="https://github.com/user-attachments/assets/762e5477-5c93-4724-a1af-93a67a4749af" />
 
 
 <img width="812" height="535" alt="image" src="https://github.com/user-attachments/assets/e3e86fa7-c3d5-447c-83e7-fd188ab000fd" />
